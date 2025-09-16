@@ -11,6 +11,11 @@
 
 #include <capstone/capstone.h>
 
+struct Stack {
+  int byte[4096];
+  int len;
+};
+
 #define VRT "\xe2\x95\x91"  // ║
 #define HRZ2 "\xe2\x95\x90" // ═
 #define HRZ1 "\xe2\x94\x80" // ─
@@ -23,6 +28,7 @@
 #define BR "\xe2\x95\x9d"   // ╝
 //
 #define AR "\xe2\x86\x92" // →
+#define DV "\xe2\x95\x8d" // ╍
 
 #define INSN_MAX_BYTES 16
 uint8_t s[INSN_MAX_BYTES];
@@ -116,16 +122,82 @@ void place_top(unsigned long long topof_stack,
   for (int i = 0; i < 30; i++) {
     printf("%s", HRZ2);
   }
-  printf("%s %s rsp [ %p ], rbp [ %p ]\n", TR, AR, topof_stack, base_pointer);
+  printf("%s \n", TR);
 }
 
-void place_bottom() {
+void place_bottom(unsigned long long topof_stack,
+                  unsigned long long base_pointer) {
 
   printf("%s", BL);
   for (int i = 0; i < 30; i++) {
-    printf("%s", HRZ2);
+    printf("%s", DV);
   }
-  printf("%s\n", BR);
+  printf("%s %s rsp [ %p ], rbp [ %p ]\n", BR, AR, topof_stack, base_pointer);
+}
+
+void place_byte_box(void *start_rsp, void *current_rsp, pid_t pid,
+                    struct Stack *s1) {
+
+  unsigned long long stack_value;
+  int remainder;
+  int quotient;
+  int diff = (int)(start_rsp - current_rsp);
+
+  if (diff <= 8) {
+    printf("%p\n", start_rsp - 8);
+
+    stack_value = ptrace(PTRACE_PEEKDATA, pid, start_rsp - 8, NULL);
+
+    for (int i = 0; i < 8; i++) {
+      unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
+      printf("0x%02x '%c'", byte, isprint(byte) ? byte : '.');
+    }
+  } else {
+    remainder = diff % 8;
+    printf("remainder: %d \n", remainder);
+    if (remainder == 0) {
+      quotient = diff / 8;
+      for (int i = 0; i < quotient; i++) {
+        stack_value = ptrace(PTRACE_PEEKDATA, pid, current_rsp, NULL);
+        for (int i = 0; i < 8; i++) {
+          unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
+          printf("0x%02x '%c' ", byte, isprint(byte) ? byte : '.');
+        }
+      }
+    } else {
+      quotient = (diff / 8);
+      // printf("quotient: %d \n", quotient);
+      void *ptr = current_rsp;
+      int i = 0;
+      s1->len = 0;
+      for (; i < quotient; i++) {
+        // printf("%d\n", i);
+        // printf("%p\n", ptr - (8 * i));
+
+        stack_value = ptrace(PTRACE_PEEKDATA, pid, ptr, NULL);
+        for (int i = 0; i < 8; i++) {
+          unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
+          // pritf("0x%02x '%c' ", byte, isprint(byte) ? byte : '.');
+          s1->byte[i] = byte;
+          s1->len++;
+          // printf("\nstruct test: %x \n", s1.byte[i]);
+        }
+        ptr = ptr + 8;
+      }
+      stack_value = ptrace(PTRACE_PEEKDATA, pid, ptr - 8, NULL);
+      printf("stack_value: 0x%016lx \n", stack_value);
+      for (; i < diff; i++) {
+        unsigned char byte = (stack_value >> (8 * remainder)) & 0xFF;
+        // s1.byte[i] = byte;
+        // s1.len++;
+        // printf("\nstruct test: %x \n", s1.byte[i]);
+      }
+
+      for (int i = 0; i < s1->len; i++) {
+        printf("\nstruct test: %x \n", s1->byte[i]);
+      }
+    }
+  }
 }
 
 void place_bars() {
@@ -143,7 +215,7 @@ void start_stack(unsigned long long topof_stack,
   puts("Program Start");
   place_top(topof_stack, base_pointer);
   place_bars();
-  place_bottom();
+  place_bottom(topof_stack, base_pointer);
 }
 
 void info_regs(struct user_regs_struct regs) { print_regs(regs); }
@@ -164,8 +236,13 @@ int main(int argc, char **argv) {
   int flag = 0;
   unsigned long long stack_value;
 
+  struct Stack s1;
+  // Struct Stack *ptr = &s1;
+  s1.len = 0;
+
   struct user_regs_struct regs = {};
   unsigned long long topof_stack;
+  int stack_increaseBy = 0;
   ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
   info_regs(regs);
   disas_rip(child_pid);
@@ -173,6 +250,11 @@ int main(int argc, char **argv) {
   topof_stack = regs.rsp;
   start_stack(topof_stack, regs.rbp);
   stack_value = ptrace(PTRACE_PEEKDATA, child_pid, pointer, NULL);
+  printf("value on stack at rsp[%016p]: 0x%016lx\n", pointer, stack_value);
+  for (int i = 0; i < 8; i++) {
+    unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
+    printf("Byte %d: 0x%02x '%c' \n", i, byte, isprint(byte) ? byte : '.');
+  }
   getchar();
 
   while (1) {
@@ -190,11 +272,24 @@ int main(int argc, char **argv) {
     disas_rip(child_pid);
     pointer = (void *)regs.rsp;
     stack_value = ptrace(PTRACE_PEEKDATA, child_pid, pointer, NULL);
+    printf("start rsp: %p \n", topof_stack);
     printf("value on stack at rsp[%016p]: 0x%016lx\n", pointer, stack_value);
+    int stack_increaseBy = (int)((void *)topof_stack - pointer);
+    printf("stack_increasedBy: %d \n", stack_increaseBy);
+    int diff = stack_increaseBy - s1.len;
+    printf("stack diff: %d\n", diff);
     for (int i = 0; i < 8; i++) {
       unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
+      printf("%x\n", stack_value >> (8 * i));
       printf("Byte %d: 0x%02x '%c'\n", i, byte, isprint(byte) ? byte : '.');
+      s1.byte[s1.len] = byte;
+      s1.len++;
     }
+    for (int i = 0; i < 8; i++) {
+      printf("struct test: 0x%x\n", s1.byte[i]);
+    }
+
+    // place_byte_box((void *)topof_stack, pointer, child_pid, &s1);
     getchar();
 
     check_signal(WSTOPSIG(wstatus), SIGTRAP);

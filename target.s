@@ -3,8 +3,8 @@
 
 _start:
     push 20                  
-    sub rsp, 8              
-    mov rax, 0x48454c4c4f
+    sub rsp, 1              
+    mov rax, 0x48454c4f
     mov qword ptr [rsp], rax
     mov byte ptr [rsp], 'H'  
 
