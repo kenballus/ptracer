@@ -1,4 +1,3 @@
-#include <ctype.h>      // for isprint
 #include <signal.h>     // for SIG*
 #include <stdint.h>     // for uint*_t
 #include <stdio.h>      // for puts, printf
@@ -23,6 +22,7 @@
 #define BR "\xe2\x95\x9d"   // ╝
 //
 #define AR "\xe2\x86\x92" // →
+#define DV "\xe2\x95\x8d" // ╍
 
 #define INSN_MAX_BYTES 16
 uint8_t s[INSN_MAX_BYTES];
@@ -40,25 +40,25 @@ long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
 }
 
 void print_regs(struct user_regs_struct regs) {
-  puts("+-****** Register Info *********");
-  printf("| rax: %llu\n", regs.rax);
-  printf("| rbx: %llu\n", regs.rbx);
-  printf("| rcx: %llu\n", regs.rcx);
-  printf("| rdx: %llu\n", regs.rdx);
-  printf("| rdi: %llu\n", regs.rdi);
-  printf("| rsi: %llu\n", regs.rsi);
-  printf("| r8:  %llu\n", regs.r8);
-  printf("| r9:  %llu\n", regs.r9);
-  printf("| r10: %llu\n", regs.r10);
-  printf("| r11: %llu\n", regs.r11);
-  printf("| r12: %llu\n", regs.r12);
-  printf("| r13: %llu\n", regs.r13);
-  printf("| r14: %llu\n", regs.r14);
-  printf("| r15: %llu\n", regs.r15);
-  printf("| rip: %p\n", regs.rip);
-  printf("| rbp: %p\n", regs.rbp);
-  printf("| rsp: %p\n", regs.rsp);
-  puts("+-****************************");
+  puts("+--------Register Info---------+");
+  printf("| rax: 0x%016llx      |\n", regs.rax);
+  printf("| rbx: 0x%016llx      |\n", regs.rbx);
+  printf("| rcx: 0x%016llx      |\n", regs.rcx);
+  printf("| rdx: 0x%016llx      |\n", regs.rdx);
+  printf("| rdi: 0x%016llx      |\n", regs.rdi);
+  printf("| rsi: 0x%016llx      |\n", regs.rsi);
+  printf("| r8:  %llu                       |\n", regs.r8);
+  printf("| r9:  %llu                       |\n", regs.r9);
+  printf("| r10: %llu                       |\n", regs.r10);
+  printf("| r11: %llu                       |\n", regs.r11);
+  printf("| r12: %llu                       |\n", regs.r12);
+  printf("| r13: %llu                       |\n", regs.r13);
+  printf("| r14: %llu                       |\n", regs.r14);
+  printf("| r15: %llu                       |\n", regs.r15);
+  printf("| rip: 0x%016llx      |\n", regs.rip);
+  printf("| rbp: 0x%016llx      |\n", regs.rbp);
+  printf("| rsp: 0x%016llx      |\n", regs.rsp);
+  puts("+------------------------------+");
   printf("\n");
 }
 
@@ -110,46 +110,71 @@ uint64_t disas_rip(pid_t pid) {
   cs_close(&cs_handle);
 }
 
-void place_top(unsigned long long topof_stack,
-               unsigned long long base_pointer) {
+void place_top() {
   printf("%s", TL);
   for (int i = 0; i < 30; i++) {
     printf("%s", HRZ2);
   }
-  printf("%s %s rsp [ %p ], rbp [ %p ]\n", TR, AR, topof_stack, base_pointer);
+  printf("%s \n", TR);
 }
 
-void place_bottom() {
-
-  printf("%s", BL);
-  for (int i = 0; i < 30; i++) {
-    printf("%s", HRZ2);
+void place_byte_box(void *ref_rsp, void *start_rsp, void *current_rsp,
+                    pid_t pid, unsigned long long stack_data) {
+  if (ref_rsp == start_rsp) {
+    place_top();
   }
-  printf("%s\n", BR);
-}
-
-void place_bars() {
-
   printf("%s", VRT);
   for (int i = 0; i < 30; i++) {
-    printf(" ");
+    if (i < 6) {
+      printf(" ");
+    } else if (i == 7) {
+      printf("0x%016lx", stack_data);
+    } else if (i > 7 && i < 14) {
+      printf(" ");
+    } else if (i == 17) {
+      printf("%s\n", VRT);
+    }
   }
-  printf("%s\n", VRT);
+
+  if (ref_rsp == current_rsp) {
+    printf("%s", BL);
+    for (int i = 0; i < 30; i++) {
+      printf("%s", HRZ2);
+    }
+    if (ref_rsp == start_rsp) {
+      printf("%s %s rsp [ %p ]** \n", BR, AR, ref_rsp);
+    } else {
+      printf("%s %s rsp [ %p ] \n", BR, AR, ref_rsp);
+    }
+  } else {
+    printf("%s", VRT);
+    for (int i = 0; i < 30; i++) {
+      printf("-");
+    }
+    if (ref_rsp == start_rsp) {
+      printf("%s %s     [ %p ]** \n", VRT, AR, ref_rsp);
+    } else {
+      printf("%s %s     [ %p ] \n", VRT, AR, ref_rsp);
+    }
+  }
 }
 
-void start_stack(unsigned long long topof_stack,
-                 unsigned long long base_pointer) {
+void parse_stack(void *start_rsp, void *current_rsp, pid_t pid) {
 
-  puts("Program Start");
-  place_top(topof_stack, base_pointer);
-  place_bars();
-  place_bottom();
+  void *ref_ptr = start_rsp;
+  unsigned long long stack_value;
+  printf("Program Start **\n");
+  while (ref_ptr >= current_rsp) {
+    stack_value = ptrace(PTRACE_PEEKDATA, pid, ref_ptr, NULL);
+    place_byte_box(ref_ptr, start_rsp, current_rsp, pid, stack_value);
+    ref_ptr = ref_ptr - 8;
+  }
 }
 
 void info_regs(struct user_regs_struct regs) { print_regs(regs); }
 
 int main(int argc, char **argv) {
-  printf("\e[1;1H\e[2J");
+  printf("\e[1;1H\e[2J"); // clear screen
 
   pid_t child_pid = fork();
   if (child_pid == -1) {
@@ -161,18 +186,18 @@ int main(int argc, char **argv) {
     die("execve failed!");
   }
   wait_and_expect_signal(child_pid, SIGTRAP);
-  int flag = 0;
-  unsigned long long stack_value;
 
   struct user_regs_struct regs = {};
   unsigned long long topof_stack;
   ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
-  info_regs(regs);
-  disas_rip(child_pid);
-  void *pointer = (void *)regs.rsp;
+
   topof_stack = regs.rsp;
-  start_stack(topof_stack, regs.rbp);
-  stack_value = ptrace(PTRACE_PEEKDATA, child_pid, pointer, NULL);
+  void *pointer = (void *)regs.rsp;
+
+  info_regs(regs);
+
+  parse_stack((void *)topof_stack, pointer, child_pid);
+  disas_rip(child_pid);
   getchar();
 
   while (1) {
@@ -186,15 +211,13 @@ int main(int argc, char **argv) {
       break;
     }
     ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
-    info_regs(regs);
-    disas_rip(child_pid);
     pointer = (void *)regs.rsp;
-    stack_value = ptrace(PTRACE_PEEKDATA, child_pid, pointer, NULL);
-    printf("value on stack at rsp[%016p]: 0x%016lx\n", pointer, stack_value);
-    for (int i = 0; i < 8; i++) {
-      unsigned char byte = (stack_value >> (8 * i)) & 0xFF;
-      printf("Byte %d: 0x%02x '%c'\n", i, byte, isprint(byte) ? byte : '.');
-    }
+
+    info_regs(regs);
+
+    parse_stack((void *)topof_stack, pointer, child_pid);
+    disas_rip(child_pid);
+
     getchar();
 
     check_signal(WSTOPSIG(wstatus), SIGTRAP);
