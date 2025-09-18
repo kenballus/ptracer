@@ -142,7 +142,7 @@ void place_byte_box(void *ref_rsp, void *start_rsp, void *current_rsp,
       printf("%s", HRZ2);
     }
     if (ref_rsp == start_rsp) {
-      printf("%s %s rsp [ %p ]** \n", BR, AR, ref_rsp);
+      printf("%s %s rsp [ %p ]**(Top of Stack) \n", BR, AR, ref_rsp);
     } else {
       printf("%s %s rsp [ %p ] \n", BR, AR, ref_rsp);
     }
@@ -152,7 +152,7 @@ void place_byte_box(void *ref_rsp, void *start_rsp, void *current_rsp,
       printf("-");
     }
     if (ref_rsp == start_rsp) {
-      printf("%s %s     [ %p ]** \n", VRT, AR, ref_rsp);
+      printf("%s %s     [ %p ]**(Top of Stack) \n", VRT, AR, ref_rsp);
     } else {
       printf("%s %s     [ %p ] \n", VRT, AR, ref_rsp);
     }
