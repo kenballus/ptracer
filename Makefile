@@ -1,7 +1,7 @@
 CC ?= gcc
-CFLAGS ?= -O0
+CFLAGS ?= -O0 -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Wvla -Wshadow -g
 
-.PHONY: all
+.PHONY: all clean fmt
 
 all: tracer target
 
@@ -12,4 +12,7 @@ target: target.s
 	$(CC) -static -nostdlib $^ -o $@
 
 clean:
-	rm tracer target
+	rm -f tracer target
+
+fmt:
+	clang-format --style='{IndentWidth: 4, AllowShortFunctionsOnASingleLine: false}' -i *.c
