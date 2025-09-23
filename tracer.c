@@ -138,20 +138,16 @@ void disas_rip(pid_t pid) {
 void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     puts(BOX_TOP);
 
-    size_t argv_len = 0;
-    while (read_word(pid, initial_rsp + (argv_len + 1) * 8)) {
-        argv_len++;
-    }
+    uint64_t argc = read_word(pid, initial_rsp);
 
-    for (size_t i = 0; i < argv_len; i++) {
-        uint64_t const stack_value = read_word(pid, initial_rsp + (argv_len - i) * 8);
+    for (uint64_t i = 0; i < argc; i++) {
+        uint64_t const stack_value = read_word(pid, initial_rsp + (argc - i) * 8);
         char *s = read_string(pid, stack_value);
-        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argv[%" PRIu64 "]) → \"%s\"\n", stack_value, argv_len - i - 1, s);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argv[%" PRIu64 "]) → \"%s\"\n", stack_value, argc - i - 1, s);
         free(s);
         puts(BOX_DIVIDER);
     }
 
-    uint64_t argc = read_word(pid, initial_rsp);
     printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argc)\n", argc);
 
     uintptr_t current_slot = initial_rsp - 8;
