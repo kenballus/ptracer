@@ -39,7 +39,7 @@ rip → push 0x14
 ║      0x0000000000000003      ║ (argc)
 ╚══════════════════════════════╝ ← rsp
 ```
-This indicates that the traced program (`./target`, with arguments `hello` and `ptracer` is running and paused just before executing its first instruction, `push 0x14`.)
+This indicates that the traced program (`./target`, with arguments `hello` and `ptracer`) is running and paused just before executing its first instruction, `push 0x14`.)
 3. Press enter. You should now see something like this:
 ```
 ╔══════════════════════════════╗
