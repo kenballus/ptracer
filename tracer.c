@@ -104,7 +104,7 @@ char *read_string(pid_t const pid, uintptr_t const addr) {
         if (!buf) {
             die("Allocation failed!");
         }
-        buf[words_read] = read_word(pid, addr);
+        buf[words_read] = read_word(pid, addr + (words_read * sizeof(*buf)));
         if (contains_zero_byte(buf[words_read])) {
             break;
         }
