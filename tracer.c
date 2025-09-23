@@ -7,6 +7,7 @@
 #include <sys/user.h>   // for struct user_regs_struct
 #include <sys/wait.h>   // for waitpid, WSTOPSIG
 #include <unistd.h>     // for fork, pid_t
+#include <limits.h>     // for CHAR_BIT
 
 #include <capstone/capstone.h>
 
@@ -15,8 +16,6 @@
 #define BOX_DIVIDER "╠══════════════════════════════╣"
 #define BOX_BOTTOM "╚══════════════════════════════╝"
 #define CLEAR_SCREEN "\x1b[1;1H\x1b[2J"
-
-#define INSN_MAX_BYTES 15
 
 void die(char *s) {
     puts(s);
@@ -81,6 +80,39 @@ csh cs_open_or_die(void) {
     return cs_handle;
 }
 
+uint64_t read_word(pid_t const pid, uintptr_t const addr) {
+    return ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
+}
+
+bool contains_zero_byte(uint64_t n) {
+    for (size_t i = 0; i < sizeof(n); i++) {
+        if (((n >> (i * CHAR_BIT)) & 0xff) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+char *read_string(pid_t const pid, uintptr_t const addr) {
+    size_t words_read = 0;
+    uint64_t *buf = malloc(words_read * sizeof(*buf));
+    if (!buf) {
+        die("Allocation failed!");
+    }
+    while (1) {
+        buf = realloc(buf, (words_read + 1) * sizeof(*buf));
+        if (!buf) {
+            die("Allocation failed!");
+        }
+        buf[words_read] = read_word(pid, addr);
+        if (contains_zero_byte(buf[words_read])) {
+            break;
+        }
+        words_read++;
+    }
+    return (char *)buf;
+}
+
 void disas_rip(pid_t pid) {
     csh cs_handle = cs_open_or_die();
     struct user_regs_struct regs = {};
@@ -88,10 +120,8 @@ void disas_rip(pid_t pid) {
 
     uint64_t instruction_buffer[2];
 
-    instruction_buffer[0] =
-        ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)regs.rip, NULL);
-    instruction_buffer[1] =
-        ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)(regs.rip + 8), NULL);
+    instruction_buffer[0] = read_word(pid, regs.rip);
+    instruction_buffer[1] = read_word(pid, regs.rip + 8);
 
     cs_insn *instructions;
     size_t count =
@@ -105,20 +135,31 @@ void disas_rip(pid_t pid) {
     cs_close(&cs_handle);
 }
 
-void parse_stack(void *const start_rsp, void **const end_rsp, pid_t pid) {
-    void *const *ref_ptr = start_rsp;
-    unsigned long long stack_value;
+void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     puts(BOX_TOP);
-    bool first = true;
-    while (ref_ptr >= end_rsp) {
-        if (!first) {
-            puts(BOX_DIVIDER);
-        } else {
-            first = false;
-        }
-        stack_value = ptrace(PTRACE_PEEKDATA, pid, ref_ptr, NULL);
-        printf(BOX_SIDE "      0x%016llx      " BOX_SIDE "\n", stack_value);
-        ref_ptr--;
+
+    size_t argv_len = 0;
+    while (read_word(pid, initial_rsp + (argv_len + 1) * 8)) {
+        argv_len++;
+    }
+
+    for (size_t i = 0; i < argv_len; i++) {
+        uint64_t const stack_value = read_word(pid, initial_rsp + (argv_len - i) * 8);
+        char *s = read_string(pid, stack_value);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argv[%" PRIu64 "]) → \"%s\"\n", stack_value, argv_len - i - 1, s);
+        free(s);
+        puts(BOX_DIVIDER);
+    }
+
+    uint64_t argc = read_word(pid, initial_rsp);
+    printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argc)\n", argc);
+
+    uintptr_t current_slot = initial_rsp - 8;
+    while (current_slot >= end_rsp) {
+        puts(BOX_DIVIDER);
+        uint64_t stack_value = read_word(pid, current_slot);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n", stack_value);
+        current_slot -= 8;
     }
     printf(BOX_BOTTOM " ← rsp\n");
 }
@@ -131,7 +172,6 @@ int main(int argc, char **argv) {
     if (argc <= 1) {
         die("Usage: ./ptracer program_to_exec *[arg]");
     }
-    printf("%s", CLEAR_SCREEN);
 
     pid_t child_pid = fork();
     if (child_pid == -1) {
@@ -144,39 +184,27 @@ int main(int argc, char **argv) {
     }
     wait_and_expect_signal(child_pid, SIGTRAP);
 
-    struct user_regs_struct regs = {};
-    unsigned long long topof_stack;
-    ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
+    struct user_regs_struct initial_regs = {};
+    ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &initial_regs);
 
-    topof_stack = regs.rsp;
-    void *pointer = (void *)regs.rsp;
-
-    info_regs(regs);
-
-    disas_rip(child_pid);
-    puts("");
-    parse_stack((void *)topof_stack, pointer, child_pid);
-    getchar();
+    uintptr_t initial_rsp = initial_regs.rsp;
 
     while (1) {
-        printf(CLEAR_SCREEN);
+        printf("%s", CLEAR_SCREEN);
+
+        struct user_regs_struct regs = {};
+        ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
+        info_regs(regs);
+        disas_rip(child_pid);
+        puts("");
+        parse_stack(initial_rsp, regs.rsp, child_pid);
+        getchar();
 
         ptrace_or_die(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
-
         int const wstatus = waitpid_or_die(child_pid);
         if (WIFEXITED(wstatus)) {
             break;
         }
-        ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
-        pointer = (void *)regs.rsp;
-
-        info_regs(regs);
-
-        disas_rip(child_pid);
-        puts("");
-        parse_stack((void *)topof_stack, pointer, child_pid);
-
-        getchar();
 
         check_signal(WSTOPSIG(wstatus), SIGTRAP);
     }
