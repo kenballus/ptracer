@@ -41,7 +41,7 @@ rip → push 0x14
 ```
 This indicates that the traced program (`./target`, with arguments `hello` and `ptracer`) is running and paused just before executing its first instruction, `push 0x14`.
 
-3. Press enter. You should now see something like this:
+3. Press enter to single-step. You should now see something like this:
 ```
 ╔══════════════════════════════╗
 ║    rax: 0x0000000000000000   ║
@@ -78,3 +78,5 @@ rip → push 0x1e
 ╚══════════════════════════════╝ ← rsp
 ```
 Note that `rsp` has decreased by 8, and `0x0000000000000014` has shown up in the stack view, demonstrating the effect of the `push`.
+
+4. Continue stepping through the program, observing the effects of each instruction on the stack and registers.
