@@ -39,8 +39,8 @@ void print_regs(struct user_regs_struct regs) {
     printf(BOX_SIDE "    rdx: 0x%016llx   " BOX_SIDE "\n", regs.rdx);
     printf(BOX_SIDE "    rdi: 0x%016llx   " BOX_SIDE "\n", regs.rdi);
     printf(BOX_SIDE "    rsi: 0x%016llx   " BOX_SIDE "\n", regs.rsi);
-    printf(BOX_SIDE "    r8:  0x%016llx   " BOX_SIDE "\n", regs.r8);
-    printf(BOX_SIDE "    r9:  0x%016llx   " BOX_SIDE "\n", regs.r9);
+    printf(BOX_SIDE "     r8: 0x%016llx   " BOX_SIDE "\n", regs.r8);
+    printf(BOX_SIDE "     r9: 0x%016llx   " BOX_SIDE "\n", regs.r9);
     printf(BOX_SIDE "    r10: 0x%016llx   " BOX_SIDE "\n", regs.r10);
     printf(BOX_SIDE "    r11: 0x%016llx   " BOX_SIDE "\n", regs.r11);
     printf(BOX_SIDE "    r12: 0x%016llx   " BOX_SIDE "\n", regs.r12);
@@ -50,6 +50,7 @@ void print_regs(struct user_regs_struct regs) {
     printf(BOX_SIDE "    rip: 0x%016llx   " BOX_SIDE "\n", regs.rip);
     printf(BOX_SIDE "    rbp: 0x%016llx   " BOX_SIDE "\n", regs.rbp);
     printf(BOX_SIDE "    rsp: 0x%016llx   " BOX_SIDE "\n", regs.rsp);
+    printf(BOX_SIDE " eflags: 0x%016llx   " BOX_SIDE "\n", regs.eflags);
     puts(BOX_BOTTOM);
     puts("");
 }
