@@ -63,14 +63,16 @@ int waitpid_or_die(pid_t pid) {
     return wstatus;
 }
 
-void check_signal(int signal, int expected_signal) {
-    if (signal != expected_signal) {
-        die("child stopped for unexpected reason");
-    }
-}
-
-void wait_and_expect_signal(pid_t pid, int signal) {
-    check_signal(WSTOPSIG(waitpid_or_die(pid)), signal);
+void single_step_until_sigtrap_or_exit(pid_t const pid) {
+    int wstatus;
+    do {
+        ptrace_or_die(PTRACE_SINGLESTEP, pid, NULL, NULL);
+        wstatus = waitpid_or_die(pid);
+        if (WIFEXITED(wstatus)) {
+            puts("Child exited.");
+            exit(0);
+        }
+    } while (WSTOPSIG(wstatus) != SIGTRAP);
 }
 
 csh cs_open_or_die(void) {
@@ -179,7 +181,10 @@ int main(int argc, char **argv) {
         execve(argv[1], argv + 1, NULL);
         die("execve failed!");
     }
-    wait_and_expect_signal(child_pid, SIGTRAP);
+
+    if (WSTOPSIG(waitpid_or_die(child_pid)) != SIGTRAP) {
+        die("child stopped for unexpected reason");
+    }
 
     struct user_regs_struct initial_regs = {};
     ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &initial_regs);
@@ -197,13 +202,6 @@ int main(int argc, char **argv) {
         parse_stack(initial_rsp, regs.rsp, child_pid);
         getchar();
 
-        ptrace_or_die(PTRACE_SINGLESTEP, child_pid, NULL, NULL);
-        int const wstatus = waitpid_or_die(child_pid);
-        if (WIFEXITED(wstatus)) {
-            break;
-        }
-
-        check_signal(WSTOPSIG(wstatus), SIGTRAP);
+        single_step_until_sigtrap_or_exit(child_pid);
     }
-    puts("Child exited.");
 }
