@@ -5,7 +5,7 @@
 #include <limits.h> // for CHAR_BIT
 #include <signal.h> // for SIG*
 #include <stdint.h> // for uint*_t
-#include <stdio.h>  // for puts, printf
+#include <stdio.h>  // for puts, printf, getline
 #include <stdlib.h> // for exit, EXIT_FAILURE, NULL
 #include <string.h> // for memcpy
 #include <sys/ptrace.h> // for ptrace, PTRACE_*
@@ -268,7 +268,11 @@ int main(int argc, char *const *const argv) {
         addr2line(target_fd, regs.rip);
         puts("");
         parse_stack(initial_rsp, regs.rsp, child_pid);
-        getchar();
+
+        char *line = NULL;
+        size_t n = 0;
+        getline(&line, &n, stdin);
+        free(line);
 
         if (single_step_until_sigtrap_or_exit(child_pid)) {
             break;
