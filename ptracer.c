@@ -1,13 +1,17 @@
-#include <signal.h>     // for SIG*
-#include <stdint.h>     // for uint*_t
-#include <stdio.h>      // for puts, printf
-#include <stdlib.h>     // for exit, EXIT_FAILURE, NULL
-#include <string.h>     // for memcpy
+#include <elf.h>    // for Elf64_Shdr, Elf64_Section
+#include <fcntl.h>  // for open, O_RDONLY
+#include <gelf.h>   // for GElf_Sym, gelf_getsym
+#include <libelf.h> // for elf_version, elf_begin, elf_getscn, elf_nextscn, Elf, Elf_Scn, elf64_getshdr, Elf_Data, elf_getdata
+#include <limits.h> // for CHAR_BIT
+#include <signal.h> // for SIG*
+#include <stdint.h> // for uint*_t
+#include <stdio.h>  // for puts, printf
+#include <stdlib.h> // for exit, EXIT_FAILURE, NULL
+#include <string.h> // for memcpy
 #include <sys/ptrace.h> // for ptrace, PTRACE_*
 #include <sys/user.h>   // for struct user_regs_struct
 #include <sys/wait.h>   // for waitpid, WSTOPSIG
 #include <unistd.h>     // for fork, pid_t
-#include <limits.h>     // for CHAR_BIT
 
 #include <capstone/capstone.h>
 
@@ -23,7 +27,7 @@ static void die(char *s) {
 }
 
 static long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
-                   void *data) {
+                          void *data) {
     long const result = ptrace(op, pid, addr, data);
     if (result == -1) {
         die("ptrace failed!");
@@ -63,16 +67,17 @@ static int waitpid_or_die(pid_t pid) {
     return wstatus;
 }
 
-static void single_step_until_sigtrap_or_exit(pid_t const pid) {
+static bool single_step_until_sigtrap_or_exit(pid_t const pid) {
     int wstatus;
     do {
         ptrace_or_die(PTRACE_SINGLESTEP, pid, NULL, NULL);
         wstatus = waitpid_or_die(pid);
         if (WIFEXITED(wstatus)) {
             puts("Child exited.");
-            exit(0);
+            return true;
         }
     } while (WSTOPSIG(wstatus) != SIGTRAP);
+    return false;
 }
 
 static csh cs_open_or_die(void) {
@@ -144,9 +149,12 @@ static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     uint64_t argc = read_word(pid, initial_rsp);
 
     for (uint64_t i = 0; i < argc; i++) {
-        uint64_t const stack_value = read_word(pid, initial_rsp + (argc - i) * 8);
+        uint64_t const stack_value =
+            read_word(pid, initial_rsp + (argc - i) * 8);
         char *s = read_string(pid, stack_value);
-        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argv[%" PRIu64 "]) → \"%s\"\n", stack_value, argc - i - 1, s);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE
+                        " (argv[%" PRIu64 "]) → \"%s\"\n",
+               stack_value, argc - i - 1, s);
         free(s);
         puts(BOX_DIVIDER);
     }
@@ -157,7 +165,8 @@ static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     while (current_slot >= end_rsp) {
         puts(BOX_DIVIDER);
         uint64_t stack_value = read_word(pid, current_slot);
-        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n", stack_value);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n",
+               stack_value);
         current_slot -= 8;
     }
     printf(BOX_BOTTOM " ← rsp\n");
@@ -167,9 +176,62 @@ static void info_regs(struct user_regs_struct regs) {
     print_regs(regs);
 }
 
-int main(int argc, char **argv) {
+static void addr2line(int const target_fd, uintptr_t addr) {
+    Elf *const elf = elf_begin(target_fd, ELF_C_READ, NULL);
+    if (elf == NULL) {
+        die("elf_begin failed");
+    }
+
+    Elf_Scn *section = elf_getscn(elf, 0);
+    GElf_Sym result_symbol;
+    Elf64_Section result_strtab_index;
+    bool have_found_a_symbol = false;
+    while (section != NULL) {
+        Elf64_Shdr const *const section_header = elf64_getshdr(section);
+        if (section_header->sh_type == SHT_SYMTAB) {
+            Elf_Data *const data = elf_getdata(section, NULL);
+            for (size_t i = 0;
+                 i < section_header->sh_size / section_header->sh_entsize;
+                 i++) {
+                GElf_Sym symbol;
+                if (gelf_getsym(data, i, &symbol) == NULL) {
+                    die("gelf_getsym failed");
+                }
+                if (!have_found_a_symbol ||
+                    (addr - result_symbol.st_value > addr - symbol.st_value)) {
+                    result_symbol = symbol;
+                    have_found_a_symbol = true;
+                    result_strtab_index = section_header->sh_link;
+                }
+            }
+        }
+
+        section = elf_nextscn(elf, section);
+    }
+
+    if (have_found_a_symbol) {
+        char const * const result_symbol_name =
+            elf_strptr(elf, result_strtab_index, result_symbol.st_name);
+        size_t const result_offset = addr - result_symbol.st_value;
+        if (result_symbol_name == NULL) {
+            die("elf_strptr failed");
+        }
+        printf("      (%s+%zu)\n", result_symbol_name, result_offset);
+    }
+
+    if (elf_end(elf) != 0) {
+        die("elf refcount is too high");
+    }
+}
+
+int main(int argc, char *const *const argv) {
     if (argc <= 1) {
         die("Usage: ./ptracer program_to_exec *[arg]");
+    }
+    char const *const target_path = argv[1];
+
+    if (elf_version(EV_CURRENT) == EV_NONE) {
+        die("couldn't initialize libelf");
     }
 
     pid_t child_pid = fork();
@@ -178,7 +240,7 @@ int main(int argc, char **argv) {
     }
     if (!child_pid) { // child
         ptrace_or_die(PTRACE_TRACEME, -1, NULL, NULL);
-        execve(argv[1], argv + 1, NULL);
+        execve(target_path, argv + 1, NULL);
         die("execve failed!");
     }
 
@@ -191,6 +253,11 @@ int main(int argc, char **argv) {
 
     uintptr_t initial_rsp = initial_regs.rsp;
 
+    int const target_fd = open(target_path, O_RDONLY);
+    if (target_fd < 0) {
+        die("couldn't open target");
+    }
+
     while (1) {
         printf("%s", CLEAR_SCREEN);
 
@@ -198,10 +265,14 @@ int main(int argc, char **argv) {
         ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
         info_regs(regs);
         disas_rip(child_pid);
+        addr2line(target_fd, regs.rip);
         puts("");
         parse_stack(initial_rsp, regs.rsp, child_pid);
         getchar();
 
-        single_step_until_sigtrap_or_exit(child_pid);
+        if (single_step_until_sigtrap_or_exit(child_pid)) {
+            break;
+        }
     }
+    close(target_fd);
 }
