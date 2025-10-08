@@ -212,10 +212,10 @@ static void addr2line(int const target_fd, uintptr_t addr) {
     if (have_found_a_symbol) {
         char const * const result_symbol_name =
             elf_strptr(elf, result_strtab_index, result_symbol.st_name);
-        size_t const result_offset = addr - result_symbol.st_value;
         if (result_symbol_name == NULL) {
             die("elf_strptr failed");
         }
+        size_t const result_offset = addr - result_symbol.st_value;
         printf("      (%s+%zu)\n", result_symbol_name, result_offset);
     }
 
