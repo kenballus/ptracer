@@ -6,7 +6,7 @@ CFLAGS ?= -O0 -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Wvla -Wshad
 all: ptracer target
 
 ptracer: ptracer.c
-	$(CC) $(CFLAGS) -lcapstone $^ -o $@
+	$(CC) $(CFLAGS) -lcapstone -lelf $^ -o $@
 
 target: target.s
 	$(CC) -static -nostdlib $^ -o $@
