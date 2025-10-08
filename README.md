@@ -4,8 +4,8 @@ A stack viewer for x86\_64 Linux.
 
 ## Getting Started
 
-1. Run `make`. This will build both `tracer` and `target`, a simple assembly program for basic testing.
-2. Run `./tracer ./target hello ptracer`. You should see something like this:
+1. Run `make`. This will build both `ptracer` and `target`, a simple assembly program for basic testing.
+2. Run `./ptracer ./target hello ptracer`. You should see something like this:
 ```
 ╔══════════════════════════════╗
 ║    rax: 0x0000000000000000   ║

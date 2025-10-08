@@ -3,16 +3,16 @@ CFLAGS ?= -O0 -fsanitize=address,undefined -Wall -Wextra -Wpedantic -Wvla -Wshad
 
 .PHONY: all clean fmt
 
-all: tracer target
+all: ptracer target
 
-tracer: tracer.c
+ptracer: ptracer.c
 	$(CC) $(CFLAGS) -lcapstone $^ -o $@
 
 target: target.s
 	$(CC) -static -nostdlib $^ -o $@
 
 clean:
-	rm -f tracer target
+	rm -f ptracer target
 
 fmt:
 	clang-format --style='{IndentWidth: 4, AllowShortFunctionsOnASingleLine: false}' -i *.c

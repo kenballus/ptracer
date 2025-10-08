@@ -17,12 +17,12 @@
 #define BOX_BOTTOM "╚══════════════════════════════╝"
 #define CLEAR_SCREEN "\x1b[1;1H\x1b[2J"
 
-void die(char *s) {
+static void die(char *s) {
     puts(s);
     exit(EXIT_FAILURE);
 }
 
-long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
+static long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
                    void *data) {
     long const result = ptrace(op, pid, addr, data);
     if (result == -1) {
@@ -31,7 +31,7 @@ long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
     return result;
 }
 
-void print_regs(struct user_regs_struct regs) {
+static void print_regs(struct user_regs_struct regs) {
     puts(BOX_TOP);
     printf(BOX_SIDE "    rax: 0x%016llx   " BOX_SIDE "\n", regs.rax);
     printf(BOX_SIDE "    rbx: 0x%016llx   " BOX_SIDE "\n", regs.rbx);
@@ -55,7 +55,7 @@ void print_regs(struct user_regs_struct regs) {
     puts("");
 }
 
-int waitpid_or_die(pid_t pid) {
+static int waitpid_or_die(pid_t pid) {
     int wstatus;
     if (waitpid(pid, &wstatus, 0) != pid) {
         die("waitpid failed!");
@@ -63,7 +63,7 @@ int waitpid_or_die(pid_t pid) {
     return wstatus;
 }
 
-void single_step_until_sigtrap_or_exit(pid_t const pid) {
+static void single_step_until_sigtrap_or_exit(pid_t const pid) {
     int wstatus;
     do {
         ptrace_or_die(PTRACE_SINGLESTEP, pid, NULL, NULL);
@@ -75,7 +75,7 @@ void single_step_until_sigtrap_or_exit(pid_t const pid) {
     } while (WSTOPSIG(wstatus) != SIGTRAP);
 }
 
-csh cs_open_or_die(void) {
+static csh cs_open_or_die(void) {
     csh cs_handle;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &cs_handle) != CS_ERR_OK) {
         die("cs_open failed!");
@@ -83,11 +83,11 @@ csh cs_open_or_die(void) {
     return cs_handle;
 }
 
-uint64_t read_word(pid_t const pid, uintptr_t const addr) {
+static uint64_t read_word(pid_t const pid, uintptr_t const addr) {
     return ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
 }
 
-bool contains_zero_byte(uint64_t n) {
+static bool contains_zero_byte(uint64_t n) {
     for (size_t i = 0; i < sizeof(n); i++) {
         if (((n >> (i * CHAR_BIT)) & 0xff) == 0) {
             return true;
@@ -96,7 +96,7 @@ bool contains_zero_byte(uint64_t n) {
     return false;
 }
 
-char *read_string(pid_t const pid, uintptr_t const addr) {
+static char *read_string(pid_t const pid, uintptr_t const addr) {
     size_t words_read = 0;
     uint64_t *buf = malloc(words_read * sizeof(*buf));
     if (!buf) {
@@ -116,7 +116,7 @@ char *read_string(pid_t const pid, uintptr_t const addr) {
     return (char *)buf;
 }
 
-void disas_rip(pid_t pid) {
+static void disas_rip(pid_t pid) {
     csh cs_handle = cs_open_or_die();
     struct user_regs_struct regs = {};
     ptrace_or_die(PTRACE_GETREGS, pid, NULL, &regs);
@@ -138,7 +138,7 @@ void disas_rip(pid_t pid) {
     cs_close(&cs_handle);
 }
 
-void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
+static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     puts(BOX_TOP);
 
     uint64_t argc = read_word(pid, initial_rsp);
@@ -163,7 +163,7 @@ void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     printf(BOX_BOTTOM " ← rsp\n");
 }
 
-void info_regs(struct user_regs_struct regs) {
+static void info_regs(struct user_regs_struct regs) {
     print_regs(regs);
 }
 
