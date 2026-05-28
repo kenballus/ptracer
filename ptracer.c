@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <elf.h>    // for Elf64_Shdr, Elf64_Section
 #include <fcntl.h>  // for open, O_RDONLY
 #include <gelf.h>   // for GElf_Sym, gelf_getsym
@@ -176,16 +177,16 @@ static void info_regs(struct user_regs_struct regs) {
     print_regs(regs);
 }
 
-static void addr2line(int const target_fd, uintptr_t addr) {
+static void get_symbol_offset(int const target_fd, uintptr_t addr) {
     Elf *const elf = elf_begin(target_fd, ELF_C_READ, NULL);
     if (elf == NULL) {
         die("elf_begin failed");
     }
 
-    Elf_Scn *section = elf_getscn(elf, 0);
     GElf_Sym result_symbol;
     Elf64_Section result_strtab_index;
     bool have_found_a_symbol = false;
+    Elf_Scn *section = elf_getscn(elf, 0);
     while (section != NULL) {
         Elf64_Shdr const *const section_header = elf64_getshdr(section);
         if (section_header->sh_type == SHT_SYMTAB) {
@@ -265,13 +266,16 @@ int main(int argc, char *const *const argv) {
         ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
         info_regs(regs);
         disas_rip(child_pid);
-        addr2line(target_fd, regs.rip);
+        get_symbol_offset(target_fd, regs.rip);
         puts("");
         parse_stack(initial_rsp, regs.rsp, child_pid);
 
         char *line = NULL;
         size_t n = 0;
-        getline(&line, &n, stdin);
+        if (getline(&line, &n, stdin) == -1) {
+            free(line);
+            break;
+        }
         free(line);
 
         if (single_step_until_sigtrap_or_exit(child_pid)) {
