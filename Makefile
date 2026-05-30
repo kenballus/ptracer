@@ -5,16 +5,16 @@ TARGET_CFLAGS := -O0 -Wall -Wextra -Wpedantic -Wvla -Wshadow -g -static -nostdli
 
 .PHONY: all clean fmt
 
-all: ptracer target
+all: ptracer examples/echo/echo
 
 ptracer: ptracer.c
 	$(CC) $(CFLAGS) -lcapstone -lelf $^ -o $@
 
-target: target.c mini_libc/libc.S mini_libc/libc.c
+examples/echo/echo: examples/echo/echo.c mini_libc/libc.S mini_libc/libc.c
 	$(CC) $(TARGET_CFLAGS) $^ -o $@
 
 clean:
-	rm -f ptracer target
+	rm -f ptracer examples/echo/echo
 
 fmt:
 	clang-format --style='{IndentWidth: 4, AllowShortFunctionsOnASingleLine: false}' -i ptracer.c mini_libc/libc.c
