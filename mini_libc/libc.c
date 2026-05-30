@@ -7,7 +7,21 @@
 #include <stdio.h> // for EOF, puts
 #include <sys/mman.h> // for mmap, MAP_*, PROT_*
 #include <limits.h> // for PAGE_SIZE
-#include <stdint.h> // for SIZE_MAX, intptr_t
+#include <stdint.h> // for SIZE_MAX, intptr_t, uintptr_t
+#include <stdlib.h> // for malloc, free
+#include <fcntl.h> // for mode_t, open, O_*
+#include <stdarg.h> // for va_list, va_start, va_arg, va_end
+
+int open(char const *const path, int flags, ...) {
+    if (flags & (O_TMPFILE | O_CREAT)) {
+        va_list va;
+        va_start(va, flags);
+        mode_t mode = va_arg(va, mode_t);
+        va_end(va);
+        return syscall((uintptr_t)path, flags, mode);
+    }
+    return syscall((uintptr_t)path, flags);
+}
 
 ssize_t write(int const fd, void const *const buf, size_t const count) {
     return syscall(SYS_write, fd, buf, count);
