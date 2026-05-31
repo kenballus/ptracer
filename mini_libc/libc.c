@@ -1,16 +1,16 @@
 #define _GNU_SOURCE
-#include <unistd.h> // for syscall, STDOUT_FILENO, write, _exit
-#include <sys/types.h> // for ssize_t, off_t
+#include <fcntl.h>       // for mode_t, open, O_*
+#include <limits.h>      // for PAGE_SIZE
+#include <stdarg.h>      // for va_list, va_start, va_arg, va_end
+#include <stddef.h>      // for size_t, unreachable, NULL
+#include <stdint.h>      // for SIZE_MAX, intptr_t, uintptr_t
+#include <stdio.h>       // for EOF, puts
+#include <stdlib.h>      // for malloc, free
+#include <string.h>      // for strlen, strcpy, strcat
+#include <sys/mman.h>    // for mmap, MAP_*, PROT_*
 #include <sys/syscall.h> // for SYS_*
-#include <stddef.h> // for size_t, unreachable, NULL
-#include <string.h> // for strlen, strcpy, strcat
-#include <stdio.h> // for EOF, puts
-#include <sys/mman.h> // for mmap, MAP_*, PROT_*
-#include <limits.h> // for PAGE_SIZE
-#include <stdint.h> // for SIZE_MAX, intptr_t, uintptr_t
-#include <stdlib.h> // for malloc, free
-#include <fcntl.h> // for mode_t, open, O_*
-#include <stdarg.h> // for va_list, va_start, va_arg, va_end
+#include <sys/types.h>   // for ssize_t, off_t
+#include <unistd.h>      // for syscall, STDOUT_FILENO, write, _exit
 
 int open(char const *const path, int flags, ...) {
     if (flags & (O_TMPFILE | O_CREAT)) {
@@ -50,7 +50,8 @@ size_t strlen(char const *s) {
     return result;
 }
 
-void *mmap(void *const addr, size_t const len, int const prot, int const flags, int const fd, off_t const off) {
+void *mmap(void *const addr, size_t const len, int const prot, int const flags,
+           int const fd, off_t const off) {
     return (void *)syscall(SYS_mmap, addr, len, prot, flags, fd, off);
 }
 
@@ -63,7 +64,8 @@ void *malloc(size_t n) {
         return NULL;
     }
     n += sizeof(size_t);
-    void *const result = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    void *const result = mmap(NULL, n, PROT_READ | PROT_WRITE,
+                              MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if ((intptr_t)result < 0) {
         return NULL;
     }

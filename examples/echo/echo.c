@@ -1,4 +1,4 @@
-#include <stdio.h> // for puts
+#include <stdio.h>  // for puts
 #include <stdlib.h> // for EXIT_FAILURE
 #include <string.h> // for strlen, strcat
 

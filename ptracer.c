@@ -8,7 +8,7 @@
 #include <stdint.h> // for uint*_t
 #include <stdio.h>  // for puts, printf, getline
 #include <stdlib.h> // for exit, EXIT_FAILURE, NULL
-#include <string.h> // for memcpy
+#include <string.h> // for memcpy, strcmp
 #include <sys/ptrace.h> // for ptrace, PTRACE_*
 #include <sys/user.h>   // for struct user_regs_struct
 #include <sys/wait.h>   // for waitpid, WSTOPSIG
@@ -16,11 +16,11 @@
 
 #include <capstone/capstone.h>
 
-#define BOX_TOP "╔══════════════════════════════╗"
+char const BOX_TOP[] = "╔══════════════════════════════╗";
 #define BOX_SIDE "║"
-#define BOX_DIVIDER "╠══════════════════════════════╣"
+char const BOX_DIVIDER[] = "╠══════════════════════════════╣";
 #define BOX_BOTTOM "╚══════════════════════════════╝"
-#define CLEAR_SCREEN "\x1b[1;1H\x1b[2J"
+char const CLEAR_SCREEN[] = "\x1b[1;1H\x1b[2J";
 
 static void die(char *s) {
     puts(s);
@@ -145,14 +145,62 @@ static void disas_rip(pid_t pid) {
 }
 
 static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
+    // The initial state of the stack looks like this:
+    // |-----------------|
+    // | NULL            |
+    // |-----------------|
+    // | envp[envc - 1]  |
+    // |-----------------|
+    // | ...more envp... |
+    // |-----------------|
+    // | envp[0]         |
+    // |-----------------|
+    // | NULL            |
+    // |-----------------|
+    // | argv[argc - 1]  |
+    // |-----------------|
+    // | ...more argv... |
+    // |-----------------|
+    // | argv[0]         |
+    // |-----------------|
+    // | argc            |
+    // |-----------------| <-- rsp
+
     puts(BOX_TOP);
 
     uint64_t argc = read_word(pid, initial_rsp);
 
+    uintptr_t envp_start = initial_rsp + 8 /* for argc */ +
+                           argc * 8 /* for argv */ +
+                           8 /* for NULL on the end of argv */;
+
+    size_t envc = 0;
+    while (read_word(pid, envp_start + envc * 8)) {
+        envc++;
+    }
+
+    printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n",
+           read_word(pid, envp_start - 8));
+    puts(BOX_DIVIDER);
+
+    for (size_t i = 0; i < envc; i++) {
+        uintptr_t const stack_value = read_word(pid, envp_start + i * 8);
+        char *const s = read_string(pid, stack_value);
+        printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE
+                        " (envp[%" PRIu64 "]) → \"%s\"\n",
+               stack_value, envc - i - 1, s);
+        free(s);
+        puts(BOX_DIVIDER);
+    }
+
+    printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n",
+           read_word(pid, initial_rsp + (argc + 1) * 8));
+    puts(BOX_DIVIDER);
+
     for (uint64_t i = 0; i < argc; i++) {
-        uint64_t const stack_value =
+        uintptr_t const stack_value =
             read_word(pid, initial_rsp + (argc - i) * 8);
-        char *s = read_string(pid, stack_value);
+        char *const s = read_string(pid, stack_value);
         printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE
                         " (argv[%" PRIu64 "]) → \"%s\"\n",
                stack_value, argc - i - 1, s);
@@ -211,7 +259,7 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
     }
 
     if (have_found_a_symbol) {
-        char const * const result_symbol_name =
+        char const *const result_symbol_name =
             elf_strptr(elf, result_strtab_index, result_symbol.st_name);
         if (result_symbol_name == NULL) {
             die("elf_strptr failed");
@@ -225,9 +273,13 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
     }
 }
 
-int main(int argc, char *const *const argv) {
+int main(int argc, char *const *argv, char *const *const envp) {
     if (argc <= 1) {
-        die("Usage: ./ptracer program_to_exec *[arg]");
+        die("Usage: ./ptracer [--pass-envp] program_to_exec *[arg]");
+    }
+    bool const pass_envp = strcmp(argv[1], "--pass-envp") == 0;
+    if (pass_envp) {
+        argv++;
     }
     char const *const target_path = argv[1];
 
@@ -241,7 +293,7 @@ int main(int argc, char *const *const argv) {
     }
     if (!child_pid) { // child
         ptrace_or_die(PTRACE_TRACEME, -1, NULL, NULL);
-        execve(target_path, argv + 1, NULL);
+        execve(target_path, argv + 1, pass_envp ? envp : NULL);
         die("execve failed!");
     }
 

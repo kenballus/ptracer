@@ -17,4 +17,4 @@ clean:
 	rm -f ptracer examples/echo/echo
 
 fmt:
-	clang-format --style='{IndentWidth: 4, AllowShortFunctionsOnASingleLine: false}' -i ptracer.c mini_libc/libc.c
+	clang-format --style='{IndentWidth: 4, AllowShortFunctionsOnASingleLine: false}' -i ptracer.c mini_libc/libc.c examples/echo/echo.c

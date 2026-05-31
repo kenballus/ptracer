@@ -1,3 +1,4 @@
 ptracer
 target
 .gdb_history
+examples/echo/echo
