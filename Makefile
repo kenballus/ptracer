@@ -1,5 +1,5 @@
 CC ?= clang
-CFLAGS ?= -O0 -Wall -Wextra -Wpedantic -Wvla -Wshadow -g -std=c23 -fsanitize=address,undefined
+CFLAGS ?= -O3 -Wall -Wextra -Wpedantic -Wvla -Wshadow -g -std=c23 -fsanitize=address,undefined
 
 TARGET_CFLAGS := -O0 -Wall -Wextra -Wpedantic -Wvla -Wshadow -g -static -nostdlib -std=c23 -fno-stack-protector
 

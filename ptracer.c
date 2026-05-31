@@ -6,7 +6,7 @@
 #include <limits.h> // for CHAR_BIT
 #include <signal.h> // for SIG*
 #include <stdint.h> // for uint*_t
-#include <stdio.h>  // for puts, printf, getline
+#include <stdio.h>  // for puts, printf, getline, fflush, stdout
 #include <stdlib.h> // for exit, EXIT_FAILURE, NULL
 #include <string.h> // for memcpy, strcmp
 #include <sys/ptrace.h> // for ptrace, PTRACE_*
@@ -55,7 +55,60 @@ static void print_regs(struct user_regs_struct regs) {
     printf(BOX_SIDE "    rip: 0x%016llx   " BOX_SIDE "\n", regs.rip);
     printf(BOX_SIDE "    rbp: 0x%016llx   " BOX_SIDE "\n", regs.rbp);
     printf(BOX_SIDE "    rsp: 0x%016llx   " BOX_SIDE "\n", regs.rsp);
-    printf(BOX_SIDE " eflags: 0x%016llx   " BOX_SIDE "\n", regs.eflags);
+    printf(BOX_SIDE " eflags: 0x%016llx   " BOX_SIDE, regs.eflags);
+    if (regs.eflags & 0x1) {
+        printf(" (CF)");
+    }
+    if (regs.eflags & 0x4) {
+        printf(" (PF)");
+    }
+    if (regs.eflags & 0x10) {
+        printf(" (AF)");
+    }
+    if (regs.eflags & 0x40) {
+        printf(" (ZF)");
+    }
+    if (regs.eflags & 0x80) {
+        printf(" (SF)");
+    }
+    if (regs.eflags & 0x100) {
+        printf(" (TF)");
+    }
+    if (regs.eflags & 0x200) {
+        printf(" (IF)");
+    }
+    if (regs.eflags & 0x400) {
+        printf(" (DF)");
+    }
+    if (regs.eflags & 0x800) {
+        printf(" (OF)");
+    }
+    if (regs.eflags & 0x3000) {
+        printf(" (IOPL)");
+    }
+    if (regs.eflags & 0x4000) {
+        printf(" (NT)");
+    }
+    if (regs.eflags & 0x10000) {
+        printf(" (RF)");
+    }
+    if (regs.eflags & 0x20000) {
+        printf(" (VM)");
+    }
+    if (regs.eflags & 0x40000) {
+        printf(" (AC)");
+    }
+    if (regs.eflags & 0x80000) {
+        printf(" (VIF)");
+    }
+    if (regs.eflags & 0x100000) {
+        printf(" (VIP)");
+    }
+    if (regs.eflags & 0x200000) {
+        printf(" (ID)");
+    }
+
+    puts("");
     puts(BOX_BOTTOM);
     puts("");
 }
@@ -74,7 +127,7 @@ static bool single_step_until_sigtrap_or_exit(pid_t const pid) {
         ptrace_or_die(PTRACE_SINGLESTEP, pid, NULL, NULL);
         wstatus = waitpid_or_die(pid);
         if (WIFEXITED(wstatus)) {
-            puts("Child exited.");
+            printf("Child exited with status %d.\n", WEXITSTATUS(wstatus));
             return true;
         }
     } while (WSTOPSIG(wstatus) != SIGTRAP);
@@ -127,6 +180,7 @@ static void disas_rip(pid_t pid) {
     struct user_regs_struct regs = {};
     ptrace_or_die(PTRACE_GETREGS, pid, NULL, &regs);
 
+    // an x86_64 instruction is at most 15 bytes long
     uint64_t instruction_buffer[2];
 
     instruction_buffer[0] = read_word(pid, regs.rip);
@@ -137,27 +191,24 @@ static void disas_rip(pid_t pid) {
         cs_disasm(cs_handle, (uint8_t *)instruction_buffer,
                   sizeof(instruction_buffer), regs.rip, 0, &instructions);
     if (count <= 0) {
-        die("cs_disasm failed!");
+        printf("rip → ???\n");
+    } else {
+        printf("rip → %s %s\n", instructions[0].mnemonic, instructions[0].op_str);
+        cs_free(instructions, count);
     }
-    printf("rip → %s %s\n", instructions[0].mnemonic, instructions[0].op_str);
-    cs_free(instructions, count);
     cs_close(&cs_handle);
 }
 
-static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
+static void parse_stack(uintptr_t initial_rsp, struct user_regs_struct const regs, pid_t pid) {
     // The initial state of the stack looks like this:
     // |-----------------|
     // | NULL            |
-    // |-----------------|
-    // | envp[envc - 1]  |
     // |-----------------|
     // | ...more envp... |
     // |-----------------|
     // | envp[0]         |
     // |-----------------|
     // | NULL            |
-    // |-----------------|
-    // | argv[argc - 1]  |
     // |-----------------|
     // | ...more argv... |
     // |-----------------|
@@ -211,9 +262,9 @@ static void parse_stack(uintptr_t initial_rsp, uintptr_t end_rsp, pid_t pid) {
     printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE " (argc)\n", argc);
 
     uintptr_t current_slot = initial_rsp - 8;
-    while (current_slot >= end_rsp) {
+    while (current_slot >= regs.rsp) {
         puts(BOX_DIVIDER);
-        uint64_t stack_value = read_word(pid, current_slot);
+        uint64_t const stack_value = read_word(pid, current_slot);
         printf(BOX_SIDE "      0x%016" PRIx64 "      " BOX_SIDE "\n",
                stack_value);
         current_slot -= 8;
@@ -320,19 +371,30 @@ int main(int argc, char *const *argv, char *const *const envp) {
         disas_rip(child_pid);
         get_symbol_offset(target_fd, regs.rip);
         puts("");
-        parse_stack(initial_rsp, regs.rsp, child_pid);
+        parse_stack(initial_rsp, regs, child_pid);
+
+        printf("ptracer> ");
+        fflush(stdout);
 
         char *line = NULL;
         size_t n = 0;
-        if (getline(&line, &n, stdin) == -1) {
+        ssize_t const getline_rc = getline(&line, &n, stdin);
+        if (getline_rc == -1) {
             free(line);
             break;
         }
-        free(line);
-
-        if (single_step_until_sigtrap_or_exit(child_pid)) {
-            break;
+        if (line[getline_rc - 1] == '\n') {
+            line[getline_rc - 1] = '\0';
         }
+
+        if (strcmp(line, "") == 0 || strcmp(line, "step") == 0) {
+            if (single_step_until_sigtrap_or_exit(child_pid)) {
+                free(line);
+                break;
+            }
+        }
+
+        free(line);
     }
     close(target_fd);
 }
