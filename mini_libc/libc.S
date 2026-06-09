@@ -16,6 +16,7 @@ syscall:
 _start:
     mov rdi, qword ptr [rsp] // grab argc
     lea rsi, [rsp + 8]       // grab argv
+    lea rdx, [rsp + 8 /* skip argc */ + rdi * 8 /* skip argv */ + 8 /* skip NULL */] // grab envp
     and rsp, -16             // align the stack for a call
     call main
 

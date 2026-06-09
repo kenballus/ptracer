@@ -392,7 +392,7 @@ int main(int argc, char *const *argv, char *const *const envp) {
                 free(line);
                 break;
             }
-        }
+        } // TODO: more commands!
 
         free(line);
     }
