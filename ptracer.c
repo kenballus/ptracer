@@ -175,28 +175,35 @@ static char *read_string(pid_t const pid, uintptr_t const addr) {
     return (char *)buf;
 }
 
-static void disas_rip(pid_t pid) {
+static void disas_rip(pid_t pid, uint8_t count) {
     csh cs_handle = cs_open_or_die();
     struct user_regs_struct regs = {};
     ptrace_or_die(PTRACE_GETREGS, pid, NULL, &regs);
 
-    // an x86_64 instruction is at most 15 bytes long
-    uint64_t instruction_buffer[2];
+    size_t const insn_buffer_size = count * sizeof(uint64_t) * 2; // each instruction is at most 2 words
+    uint64_t *const instruction_buffer = malloc(insn_buffer_size);
+    if (!instruction_buffer) {
+        die("Allocation of instruction buffer failed.");
+    }
 
-    instruction_buffer[0] = read_word(pid, regs.rip);
-    instruction_buffer[1] = read_word(pid, regs.rip + 8);
+    for (size_t i = 0; i < count * 2 /* each insn is at most 2 words */; i++) {
+        instruction_buffer[i] = read_word(pid, regs.rip + i * 8);
+    }
 
     cs_insn *instructions;
-    size_t count =
+    size_t insn_count =
         cs_disasm(cs_handle, (uint8_t *)instruction_buffer,
-                  sizeof(instruction_buffer), regs.rip, 0, &instructions);
-    if (count <= 0) {
+                  insn_buffer_size, regs.rip, 0, &instructions);
+    if (insn_count <= 0) {
         printf("rip → ???\n");
     } else {
-        printf("rip → %s %s\n", instructions[0].mnemonic, instructions[0].op_str);
-        cs_free(instructions, count);
+        for (size_t i = 0; i < (insn_count < count ? insn_count : count); i++) {
+            printf("%s%s %s\n", i == 0 ? "rip → " : "      ", instructions[i].mnemonic, instructions[i].op_str);
+        }
+        cs_free(instructions, insn_count);
     }
     cs_close(&cs_handle);
+    free(instruction_buffer);
 }
 
 static void parse_stack(uintptr_t initial_rsp, struct user_regs_struct const regs, pid_t pid) {
@@ -316,7 +323,7 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
             die("elf_strptr failed");
         }
         size_t const result_offset = addr - result_symbol.st_value;
-        printf("      (%s+%zu)\n", result_symbol_name, result_offset);
+        printf("(%s+%zu)\n", result_symbol_name, result_offset);
     }
 
     if (elf_end(elf) != 0) {
@@ -368,8 +375,8 @@ int main(int argc, char *const *argv, char *const *const envp) {
         struct user_regs_struct regs = {};
         ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
         info_regs(regs);
-        disas_rip(child_pid);
         get_symbol_offset(target_fd, regs.rip);
+        disas_rip(child_pid, 5);
         puts("");
         parse_stack(initial_rsp, regs, child_pid);
 
@@ -392,7 +399,8 @@ int main(int argc, char *const *argv, char *const *const envp) {
                 free(line);
                 break;
             }
-        } // TODO: more commands!
+        }
+        // TODO: more commands!
 
         free(line);
     }
