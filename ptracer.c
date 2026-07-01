@@ -7,7 +7,7 @@
 #include <signal.h> // for SIG*
 #include <stdint.h> // for uint*_t
 #include <stdio.h>  // for puts, printf, getline, fflush, stdout
-#include <stdlib.h> // for exit, EXIT_FAILURE, NULL
+#include <stdlib.h> // for exit, EXIT_FAILURE
 #include <string.h> // for memcpy, strcmp
 #include <sys/ptrace.h> // for ptrace, PTRACE_*
 #include <sys/user.h>   // for struct user_regs_struct
@@ -124,7 +124,74 @@ static int waitpid_or_die(pid_t pid) {
 static bool single_step_until_sigtrap_or_exit(pid_t const pid) {
     int wstatus;
     do {
-        ptrace_or_die(PTRACE_SINGLESTEP, pid, NULL, NULL);
+        ptrace_or_die(PTRACE_SINGLESTEP, pid, nullptr, (void *)0);
+        wstatus = waitpid_or_die(pid);
+        if (WIFEXITED(wstatus)) {
+            printf("Child exited with status %d.\n", WEXITSTATUS(wstatus));
+            return true;
+        }
+    } while (WSTOPSIG(wstatus) != SIGTRAP);
+    return false;
+}
+
+static uint64_t read_word(pid_t const pid, uintptr_t const addr) {
+    return ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)addr, nullptr);
+}
+
+static uint8_t read_byte(pid_t const pid, uintptr_t const addr) {
+    return read_word(pid, addr);
+}
+
+static void write_word(pid_t const pid, uintptr_t const addr, uint64_t const data) {
+    ptrace_or_die(PTRACE_POKEDATA, pid, (void *)addr, (void *)data);
+}
+
+static void write_byte(pid_t const pid, uintptr_t const addr, uint8_t const data) {
+    write_word(pid, addr, (read_word(pid, addr) & ~0xffull) | data);
+}
+
+struct breakpoint {
+    uintptr_t addr;
+    uint8_t original_byte;
+    struct breakpoint *next;
+};
+
+static void hide_breakpoints(pid_t const pid, struct breakpoint const *const breakpoints) {
+    struct user_regs_struct regs = {};
+    ptrace_or_die(PTRACE_GETREGS, pid, nullptr, &regs);
+
+    bool have_rewound_rip = false;
+    for (struct breakpoint const *curr = breakpoints; curr != NULL; curr = curr->next) {
+        if (!have_rewound_rip && curr->addr == regs.rip - 1) {
+            regs.rip--;
+            ptrace_or_die(PTRACE_SETREGS, pid, nullptr, &regs);
+            have_rewound_rip = true;
+        }
+        write_byte(pid, curr->addr, curr->original_byte);
+    }
+}
+
+static void show_breakpoints(pid_t const pid, struct breakpoint const *const breakpoints) {
+    for (struct breakpoint const *curr = breakpoints; curr != NULL; curr = curr->next) {
+        write_byte(pid, curr->addr, 0xcc);
+    }
+}
+
+static bool continue_until_sigtrap_or_exit(pid_t const pid, struct breakpoint const *const breakpoints) {
+    struct user_regs_struct regs = {};
+    ptrace_or_die(PTRACE_GETREGS, pid, nullptr, &regs);
+
+    if (read_byte(pid, regs.rip) == 0xcc) { // this is wrong probably?
+        hide_breakpoints(pid, breakpoints);
+        if (single_step_until_sigtrap_or_exit(pid)) {
+            return true;
+        }
+        show_breakpoints(pid, breakpoints);
+    }
+
+    int wstatus;
+    do {
+        ptrace_or_die(PTRACE_CONT, pid, nullptr, (void *)0);
         wstatus = waitpid_or_die(pid);
         if (WIFEXITED(wstatus)) {
             printf("Child exited with status %d.\n", WEXITSTATUS(wstatus));
@@ -142,10 +209,6 @@ static csh cs_open_or_die(void) {
     return cs_handle;
 }
 
-static uint64_t read_word(pid_t const pid, uintptr_t const addr) {
-    return ptrace_or_die(PTRACE_PEEKDATA, pid, (void *)addr, NULL);
-}
-
 static bool contains_zero_byte(uint64_t n) {
     for (size_t i = 0; i < sizeof(n); i++) {
         if (((n >> (i * CHAR_BIT)) & 0xff) == 0) {
@@ -155,12 +218,17 @@ static bool contains_zero_byte(uint64_t n) {
     return false;
 }
 
-static char *read_string(pid_t const pid, uintptr_t const addr) {
-    size_t words_read = 0;
-    uint64_t *buf = malloc(words_read * sizeof(*buf));
-    if (!buf) {
+static void *malloc_or_die(size_t const n) {
+    void *const result = malloc(n);
+    if (!result) {
         die("Allocation failed!");
     }
+    return result;
+}
+
+static char *read_string(pid_t const pid, uintptr_t const addr) {
+    size_t words_read = 0;
+    uint64_t *buf = malloc_or_die(words_read * sizeof(*buf));
     while (1) {
         buf = realloc(buf, (words_read + 1) * sizeof(*buf));
         if (!buf) {
@@ -178,10 +246,10 @@ static char *read_string(pid_t const pid, uintptr_t const addr) {
 static void disas_rip(pid_t pid, uint8_t count) {
     csh cs_handle = cs_open_or_die();
     struct user_regs_struct regs = {};
-    ptrace_or_die(PTRACE_GETREGS, pid, NULL, &regs);
+    ptrace_or_die(PTRACE_GETREGS, pid, nullptr, &regs);
 
     size_t const insn_buffer_size = count * sizeof(uint64_t) * 2; // each instruction is at most 2 words
-    uint64_t *const instruction_buffer = malloc(insn_buffer_size);
+    uint64_t *const instruction_buffer = malloc_or_die(insn_buffer_size);
     if (!instruction_buffer) {
         die("Allocation of instruction buffer failed.");
     }
@@ -209,13 +277,13 @@ static void disas_rip(pid_t pid, uint8_t count) {
 static void parse_stack(uintptr_t initial_rsp, struct user_regs_struct const regs, pid_t pid) {
     // The initial state of the stack looks like this:
     // |-----------------|
-    // | NULL            |
+    // | nullptr         |
     // |-----------------|
     // | ...more envp... |
     // |-----------------|
     // | envp[0]         |
     // |-----------------|
-    // | NULL            |
+    // | nullptr         |
     // |-----------------|
     // | ...more argv... |
     // |-----------------|
@@ -230,7 +298,7 @@ static void parse_stack(uintptr_t initial_rsp, struct user_regs_struct const reg
 
     uintptr_t envp_start = initial_rsp + 8 /* for argc */ +
                            argc * 8 /* for argv */ +
-                           8 /* for NULL on the end of argv */;
+                           8 /* for nullptr on the end of argv */;
 
     size_t envc = 0;
     while (read_word(pid, envp_start + envc * 8)) {
@@ -284,8 +352,8 @@ static void info_regs(struct user_regs_struct regs) {
 }
 
 static void get_symbol_offset(int const target_fd, uintptr_t addr) {
-    Elf *const elf = elf_begin(target_fd, ELF_C_READ, NULL);
-    if (elf == NULL) {
+    Elf *const elf = elf_begin(target_fd, ELF_C_READ, nullptr);
+    if (!elf) {
         die("elf_begin failed");
     }
 
@@ -293,15 +361,15 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
     Elf64_Section result_strtab_index;
     bool have_found_a_symbol = false;
     Elf_Scn *section = elf_getscn(elf, 0);
-    while (section != NULL) {
+    while (section) {
         Elf64_Shdr const *const section_header = elf64_getshdr(section);
         if (section_header->sh_type == SHT_SYMTAB) {
-            Elf_Data *const data = elf_getdata(section, NULL);
+            Elf_Data *const data = elf_getdata(section, nullptr);
             for (size_t i = 0;
                  i < section_header->sh_size / section_header->sh_entsize;
                  i++) {
                 GElf_Sym symbol;
-                if (gelf_getsym(data, i, &symbol) == NULL) {
+                if (!gelf_getsym(data, i, &symbol)) {
                     die("gelf_getsym failed");
                 }
                 if (!have_found_a_symbol ||
@@ -319,7 +387,7 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
     if (have_found_a_symbol) {
         char const *const result_symbol_name =
             elf_strptr(elf, result_strtab_index, result_symbol.st_name);
-        if (result_symbol_name == NULL) {
+        if (!result_symbol_name) {
             die("elf_strptr failed");
         }
         size_t const result_offset = addr - result_symbol.st_value;
@@ -328,6 +396,13 @@ static void get_symbol_offset(int const target_fd, uintptr_t addr) {
 
     if (elf_end(elf) != 0) {
         die("elf refcount is too high");
+    }
+}
+
+void print_breakpoints(struct breakpoint const *const breakpoints) {
+    printf("Breakpoints:");
+    for (struct breakpoint const *curr = breakpoints; curr; curr = curr->next) {
+        printf(" %p\n", (void *)curr->addr);
     }
 }
 
@@ -350,8 +425,8 @@ int main(int argc, char *const *argv, char *const *const envp) {
         die("fork failed!");
     }
     if (!child_pid) { // child
-        ptrace_or_die(PTRACE_TRACEME, -1, NULL, NULL);
-        execve(target_path, argv + 1, pass_envp ? envp : NULL);
+        ptrace_or_die(PTRACE_TRACEME, -1, nullptr, nullptr);
+        execve(target_path, argv + 1, pass_envp ? envp : nullptr);
         die("execve failed!");
     }
 
@@ -360,7 +435,7 @@ int main(int argc, char *const *argv, char *const *const envp) {
     }
 
     struct user_regs_struct initial_regs = {};
-    ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &initial_regs);
+    ptrace_or_die(PTRACE_GETREGS, child_pid, nullptr, &initial_regs);
 
     uintptr_t initial_rsp = initial_regs.rsp;
 
@@ -369,21 +444,26 @@ int main(int argc, char *const *argv, char *const *const envp) {
         die("couldn't open target");
     }
 
+    struct breakpoint *breakpoints = nullptr;
+
     while (1) {
         printf("%s", CLEAR_SCREEN);
 
         struct user_regs_struct regs = {};
-        ptrace_or_die(PTRACE_GETREGS, child_pid, NULL, &regs);
+        ptrace_or_die(PTRACE_GETREGS, child_pid, nullptr, &regs);
         info_regs(regs);
         get_symbol_offset(target_fd, regs.rip);
         disas_rip(child_pid, 5);
         puts("");
         parse_stack(initial_rsp, regs, child_pid);
+        if (breakpoints) {
+            print_breakpoints(breakpoints);
+        }
 
         printf("ptracer> ");
         fflush(stdout);
 
-        char *line = NULL;
+        char *line = nullptr;
         size_t n = 0;
         ssize_t const getline_rc = getline(&line, &n, stdin);
         if (getline_rc == -1) {
@@ -394,15 +474,56 @@ int main(int argc, char *const *argv, char *const *const envp) {
             line[getline_rc - 1] = '\0';
         }
 
-        if (strcmp(line, "") == 0 || strcmp(line, "step") == 0) {
+        if (strcmp(line, "") == 0 || strcmp(line, "s") == 0 || strcmp(line, "step") == 0) {
             if (single_step_until_sigtrap_or_exit(child_pid)) {
                 free(line);
                 break;
             }
+        } else if (strncmp(line, "b ", 2) == 0 || strncmp(line, "break ", 6) == 0) {
+            char const *const operand = strchr(line, ' ');
+            char *end;
+            uintptr_t const addr = strtoull(operand, &end, 0);
+            if (*end != '\0') {
+                puts("Extra data encountered after the operand to break!");
+            } else {
+                struct breakpoint const new_breakpoint = {
+                    .addr = addr,
+                    .next = nullptr,
+                    .original_byte = read_byte(child_pid, addr),
+                };
+
+                if (!breakpoints) {
+                    breakpoints = malloc_or_die(sizeof(struct breakpoint));
+                    *breakpoints = new_breakpoint;
+                } else {
+                    struct breakpoint *curr = breakpoints;
+                    while (curr->next) {
+                        curr = curr->next;
+                    }
+                    curr->next = malloc_or_die(sizeof(struct breakpoint));
+                    *curr->next = new_breakpoint;
+                }
+            }
+        } else if (strcmp(line, "b") == 0 || strcmp(line, "break") == 0) {
+            puts("this command needs an argument.");
+        } else if ((strcmp(line, "c") == 0) || (strcmp(line, "continue") == 0)) {
+            show_breakpoints(child_pid, breakpoints);
+            if (continue_until_sigtrap_or_exit(child_pid, breakpoints)) {
+                free(line);
+                break;
+            }
+            hide_breakpoints(child_pid, breakpoints);
         }
         // TODO: more commands!
 
         free(line);
     }
+
+    while (breakpoints) {
+        struct breakpoint *next = breakpoints->next;
+        free(breakpoints);
+        breakpoints = next;
+    }
+
     close(target_fd);
 }

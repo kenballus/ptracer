@@ -2,3 +2,5 @@ ptracer
 target
 .gdb_history
 examples/echo/echo
+examples/test/test
+examples/env/env
