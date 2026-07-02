@@ -351,11 +351,50 @@ static void info_regs(struct user_regs_struct regs) {
     print_regs(regs);
 }
 
-static void get_symbol_offset(int const target_fd, uintptr_t addr) {
-    Elf *const elf = elf_begin(target_fd, ELF_C_READ, nullptr);
-    if (!elf) {
+static Elf *open_elf_or_die(int const target_fd) {
+    Elf *const result = elf_begin(target_fd, ELF_C_READ, nullptr);
+    if (!result) {
         die("elf_begin failed");
     }
+    return result;
+}
+
+static uintptr_t look_up_symbol(int const target_fd, char const *const sym) {
+    Elf *const elf = open_elf_or_die(target_fd);
+
+    uintptr_t result = 0;
+    for (Elf_Scn *section = elf_getscn(elf, 0); section; section = elf_nextscn(elf, section)) {
+        Elf64_Shdr const *const section_header = elf64_getshdr(section);
+        if (section_header->sh_type == SHT_SYMTAB) {
+            Elf_Data *const data = elf_getdata(section, nullptr);
+            for (size_t i = 0;
+                 i < section_header->sh_size / section_header->sh_entsize;
+                 i++) {
+                GElf_Sym symbol;
+                if (!gelf_getsym(data, i, &symbol)) {
+                    die("gelf_getsym failed");
+                }
+                char const *const symbol_name = elf_strptr(elf, section_header->sh_link, symbol.st_name);
+                if (!symbol_name) {
+                    die("elf_strptr failed");
+                }
+                if (strcmp(symbol_name, sym) == 0) {
+                    result = symbol.st_value;
+                    goto done;
+                }
+            }
+        }
+    }
+
+done:
+    if (elf_end(elf) != 0) {
+        die("elf refcount is too high");
+    }
+    return result;
+}
+
+static void display_symbol(int const target_fd, uintptr_t addr) {
+    Elf *const elf = open_elf_or_die(target_fd);
 
     GElf_Sym result_symbol;
     Elf64_Section result_strtab_index;
@@ -452,7 +491,7 @@ int main(int argc, char *const *argv, char *const *const envp) {
         struct user_regs_struct regs = {};
         ptrace_or_die(PTRACE_GETREGS, child_pid, nullptr, &regs);
         info_regs(regs);
-        get_symbol_offset(target_fd, regs.rip);
+        display_symbol(target_fd, regs.rip);
         disas_rip(child_pid, 5);
         puts("");
         parse_stack(initial_rsp, regs, child_pid);
@@ -480,29 +519,39 @@ int main(int argc, char *const *argv, char *const *const envp) {
                 break;
             }
         } else if (strncmp(line, "b ", 2) == 0 || strncmp(line, "break ", 6) == 0) {
-            char const *const operand = strchr(line, ' ');
+            char const *operand = strchr(line, ' ');
+            while (*operand == ' ') {
+                operand++;
+            }
             char *end;
-            uintptr_t const addr = strtoull(operand, &end, 0);
+            uintptr_t addr = strtoull(operand, &end, 0);
             if (*end != '\0') {
-                puts("Extra data encountered after the operand to break!");
-            } else {
-                struct breakpoint const new_breakpoint = {
-                    .addr = addr,
-                    .next = nullptr,
-                    .original_byte = read_byte(child_pid, addr),
-                };
-
-                if (!breakpoints) {
-                    breakpoints = malloc_or_die(sizeof(struct breakpoint));
-                    *breakpoints = new_breakpoint;
-                } else {
-                    struct breakpoint *curr = breakpoints;
-                    while (curr->next) {
-                        curr = curr->next;
-                    }
-                    curr->next = malloc_or_die(sizeof(struct breakpoint));
-                    *curr->next = new_breakpoint;
+                // leftover junk at the end of the line.
+                // probably this isn't an integer.
+                // try parsing it as a symbol
+                addr = look_up_symbol(target_fd, operand);
+                if (!addr) {
+                    // Couldn't find the symbol. Just keep going.
+                    goto repl_done;
                 }
+            }
+
+            struct breakpoint const new_breakpoint = {
+                .addr = addr,
+                .next = nullptr,
+                .original_byte = read_byte(child_pid, addr),
+            };
+
+            if (!breakpoints) {
+                breakpoints = malloc_or_die(sizeof(struct breakpoint));
+                *breakpoints = new_breakpoint;
+            } else {
+                struct breakpoint *curr = breakpoints;
+                while (curr->next) {
+                    curr = curr->next;
+                }
+                curr->next = malloc_or_die(sizeof(struct breakpoint));
+                *curr->next = new_breakpoint;
             }
         } else if (strcmp(line, "b") == 0 || strcmp(line, "break") == 0) {
             puts("this command needs an argument.");
@@ -516,6 +565,7 @@ int main(int argc, char *const *argv, char *const *const envp) {
         }
         // TODO: more commands!
 
+repl_done:
         free(line);
     }
 
