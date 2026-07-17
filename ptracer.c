@@ -22,13 +22,13 @@ char const BOX_DIVIDER[] = "╠════════════════�
 #define BOX_BOTTOM "╚══════════════════════════════╝"
 char const CLEAR_SCREEN[] = "\x1b[1;1H\x1b[2J";
 
-static void die(char *s) {
+static void die(char const *const s) {
     puts(s);
     exit(EXIT_FAILURE);
 }
 
-static long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
-                          void *data) {
+static long ptrace_or_die(enum __ptrace_request const op, pid_t const pid, void *const addr,
+                          void *const data) {
     long const result = ptrace(op, pid, addr, data);
     if (result == -1) {
         die("ptrace failed!");
@@ -36,7 +36,7 @@ static long ptrace_or_die(enum __ptrace_request op, pid_t pid, void *addr,
     return result;
 }
 
-static void print_regs(struct user_regs_struct regs) {
+static void print_regs(struct user_regs_struct const regs) {
     puts(BOX_TOP);
     printf(BOX_SIDE "    rax: 0x%016llx   " BOX_SIDE "\n", regs.rax);
     printf(BOX_SIDE "    rbx: 0x%016llx   " BOX_SIDE "\n", regs.rbx);
@@ -113,7 +113,7 @@ static void print_regs(struct user_regs_struct regs) {
     puts("");
 }
 
-static int waitpid_or_die(pid_t pid) {
+static int waitpid_or_die(pid_t const pid) {
     int wstatus;
     if (waitpid(pid, &wstatus, 0) != pid) {
         die("waitpid failed!");
@@ -209,7 +209,7 @@ static csh cs_open_or_die(void) {
     return cs_handle;
 }
 
-static bool contains_zero_byte(uint64_t n) {
+static bool contains_zero_byte(uint64_t const n) {
     for (size_t i = 0; i < sizeof(n); i++) {
         if (((n >> (i * CHAR_BIT)) & 0xff) == 0) {
             return true;
@@ -243,7 +243,7 @@ static char *read_string(pid_t const pid, uintptr_t const addr) {
     return (char *)buf;
 }
 
-static void disas_rip(pid_t pid, uint8_t count) {
+static void disas_rip(pid_t const pid, uint8_t count) {
     csh cs_handle = cs_open_or_die();
     struct user_regs_struct regs = {};
     ptrace_or_die(PTRACE_GETREGS, pid, nullptr, &regs);
@@ -459,7 +459,7 @@ int main(int argc, char *const *argv, char *const *const envp) {
         die("couldn't initialize libelf");
     }
 
-    pid_t child_pid = fork();
+    pid_t const child_pid = fork();
     if (child_pid == -1) {
         die("fork failed!");
     }
